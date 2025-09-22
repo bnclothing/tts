@@ -3,13 +3,15 @@ from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import XttsAudioConfig, XttsArgs
 from TTS.config.shared_configs import BaseDatasetConfig
 from TTS.config import BaseAudioConfig
-from TTS.api import TTS
 import os
 from flask import Flask, request, send_file, jsonify
+
+from flask_cors import CORS
 from langdetect import detect
 import uuid
+import warnings
 
-# Allowlist all required XTTS classes
+# Allowlist all required XTTS classes (for safe model loading)
 torch.serialization.add_safe_globals([
     XttsConfig,
     XttsAudioConfig,
@@ -20,8 +22,12 @@ torch.serialization.add_safe_globals([
 
 # Initialize Flask
 app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
+warnings.filterwarnings("ignore", category=UserWarning)
 
-# Load model ONCE at startup (using the same method as your working script)
+from TTS.api import TTS
+
+# Load XTTS model ONCE
 print("Loading XTTS model...")
 tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
 print("Model loaded successfully!")
@@ -36,18 +42,15 @@ os.makedirs("XTTS_outputs", exist_ok=True)
 @app.route("/speak", methods=["POST"])
 def generate_speech():
     try:
-        # Get JSON data
         data = request.get_json(force=True)
         text = data.get("text", "").strip()
         speaker_gender = data.get("chosen_SPEAKER", "").strip().lower()
 
         if not text:
             return jsonify({"error": "Text is required"}), 400
-            
         if speaker_gender not in ["male", "female"]:
             return jsonify({"error": "chosen_SPEAKER must be 'male' or 'female'"}), 400
 
-        # Select speaker
         chosen_speaker = male_speakers[0] if speaker_gender == "male" else female_speakers[0]
 
         # Auto-detect language
@@ -64,11 +67,10 @@ def generate_speech():
             language = "en"
             print("Could not detect language, using English as default")
 
-        # Generate unique filename
+        # Unique filename
         file_id = str(uuid.uuid4())
         output_path = f"XTTS_outputs/{file_id}.wav"
 
-        # Generate speech
         print(f"Generating speech with {chosen_speaker}...")
         tts.tts_to_file(
             text=text,
@@ -78,11 +80,10 @@ def generate_speech():
             split_sentences=True,
         )
 
-        # Return the audio file
         return send_file(
-            output_path, 
-            mimetype="audio/wav", 
-            as_attachment=True, 
+            output_path,
+            mimetype="audio/wav",
+            as_attachment=True,
             download_name="speech.wav"
         )
 
@@ -90,5 +91,8 @@ def generate_speech():
         print(f"Error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+
+# Run Flask in background (non-blocking for notebooks)
+def run_app():
+    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+
